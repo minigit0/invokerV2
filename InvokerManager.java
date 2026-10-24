@@ -183,8 +183,7 @@ public final class InvokerManager {
     }
 
     private static void push(Entity e, Vec3d v) {
-        e.setVelocity(e.getVelocity().add(v));
-        e.velocityModified = true;
+        e.addVelocity(v.x, v.y, v.z);
         if (e instanceof ServerPlayerEntity sp) {
             sp.networkHandler.sendPacket(new EntityVelocityUpdateS2CPacket(sp));
         }
@@ -192,7 +191,6 @@ public final class InvokerManager {
 
     private static void setVel(ServerPlayerEntity p, double x, double y, double z) {
         p.setVelocity(x, y, z);
-        p.velocityModified = true;
         p.networkHandler.sendPacket(new EntityVelocityUpdateS2CPacket(p));
     }
 
@@ -235,7 +233,6 @@ public final class InvokerManager {
             // "нельзя отбить": каждый тик возвращаем исходную скорость и владельца
             fb.setVelocity(vel);
             fb.setOwner(p);
-            fb.velocityModified = true;
             return false;
         });
     }
