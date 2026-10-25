@@ -471,7 +471,3 @@ public final class InvokerManager {
         });
     }
 }
- 
-        });
-    }
-}
