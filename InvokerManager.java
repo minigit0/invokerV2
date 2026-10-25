@@ -1,5 +1,5 @@
 package com.invokermod;
-
+ 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -18,6 +18,8 @@ import net.minecraft.entity.attribute.EntityAttributes;
 import net.minecraft.entity.damage.DamageSource;
 import net.minecraft.entity.damage.DamageTypes;
 import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.entity.player.PlayerInventory;
+import net.minecraft.item.ItemStack;
 import net.minecraft.entity.projectile.FireballEntity;
 import net.minecraft.network.packet.s2c.play.EntityVelocityUpdateS2CPacket;
 import net.minecraft.particle.ParticleEffect;
@@ -32,46 +34,46 @@ import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Vec3d;
-
+ 
 /** Вся серверная логика: сферы, кулдауны, заклинания. */
 public final class InvokerManager {
     private InvokerManager() {}
-
+ 
     static final class State {
         final int[] orbs = {-1, -1};          // [0] = первый (новый) слот, [1] = второй
         final long[] cdUntil = new long[6];
         long noFallUntil = 0;
     }
-
+ 
     interface Effect {
         /** @return true, если эффект закончился */
         boolean tick(long now);
     }
-
+ 
     private static final Map<UUID, State> STATES = new HashMap<>();
     private static final List<Effect> EFFECTS = new ArrayList<>();
     private static long now = 0;
-
+ 
     private static State state(UUID id) {
         return STATES.computeIfAbsent(id, k -> new State());
     }
-
+ 
     // ------------------------------------------------------------------ жизненный цикл
-
+ 
     public static void clearAll() {
         STATES.clear();
         EFFECTS.clear();
     }
-
+ 
     public static void remove(ServerPlayerEntity p) {
         STATES.remove(p.getUuid());
     }
-
+ 
     public static void reset(ServerPlayerEntity p) {
         STATES.remove(p.getUuid());
         sync(p);
     }
-
+ 
     public static boolean allowDamage(LivingEntity entity, DamageSource source, float amount) {
         if (entity instanceof ServerPlayerEntity p && source.isOf(DamageTypes.FALL)) {
             State s = STATES.get(p.getUuid());
@@ -79,16 +81,29 @@ public final class InvokerManager {
         }
         return true;
     }
-
+ 
     // ------------------------------------------------------------------ сферы
-
+ 
+    private static boolean hasBook(ServerPlayerEntity p) {
+        PlayerInventory inv = p.getInventory();
+        for (int i = 0; i < inv.size(); i++) {
+            ItemStack st = inv.getStack(i);
+            if (st.isOf(InvokerMod.SPELLBOOK) || st.isOf(InvokerMod.SUPER_SPELLBOOK)) return true;
+        }
+        return false;
+    }
+ 
     public static void addOrb(ServerPlayerEntity p, int type) {
+        if (!hasBook(p)) {
+            p.sendMessage(Text.literal("Нужна книга инвокера в инвентаре"), true);
+            return;
+        }
         State s = state(p.getUuid());
         s.orbs[1] = s.orbs[0];
         s.orbs[0] = type;
         sync(p);
     }
-
+ 
     public static void sync(ServerPlayerEntity p) {
         State s = state(p.getUuid());
         List<Integer> d = new ArrayList<>();
@@ -97,9 +112,9 @@ public final class InvokerManager {
         for (int i = 0; i < 6; i++) d.add((int) Math.max(0, s.cdUntil[i] - now));
         ServerPlayNetworking.send(p, new SyncPayload(d));
     }
-
+ 
     // ------------------------------------------------------------------ каст
-
+ 
     public static boolean cast(ServerPlayerEntity p, ServerWorld w) {
         now = w.getServer().getTicks();
         State s = state(p.getUuid());
@@ -129,17 +144,17 @@ public final class InvokerManager {
         sync(p);
         return true;
     }
-
+ 
     // ------------------------------------------------------------------ тик
-
+ 
     public static void tick(MinecraftServer server) {
         now = server.getTicks();
-
+ 
         Iterator<Effect> it = EFFECTS.iterator();
         while (it.hasNext()) {
             if (it.next().tick(now)) it.remove();
         }
-
+ 
         if (now % 2 == 0) {
             double t = now * 0.3;
             for (ServerWorld w : server.getWorlds()) {
@@ -161,13 +176,13 @@ public final class InvokerManager {
             }
         }
     }
-
+ 
     // ------------------------------------------------------------------ помощники
-
+ 
     private static Vec3d look(ServerPlayerEntity p) {
         return p.getRotationVec(1.0F).normalize();
     }
-
+ 
     private static Vec3d horizontalLook(ServerPlayerEntity p) {
         Vec3d l = p.getRotationVec(1.0F);
         Vec3d h = new Vec3d(l.x, 0, l.z);
@@ -177,27 +192,27 @@ public final class InvokerManager {
         }
         return h.normalize();
     }
-
+ 
     private static void sound(ServerWorld w, double x, double y, double z, SoundEvent s, float pitch) {
         w.playSound((PlayerEntity) null, x, y, z, s, SoundCategory.PLAYERS, 1.0F, pitch);
     }
-
+ 
     private static void push(Entity e, Vec3d v) {
         e.addVelocity(v.x, v.y, v.z);
         if (e instanceof ServerPlayerEntity sp) {
             sp.networkHandler.sendPacket(new EntityVelocityUpdateS2CPacket(sp));
         }
     }
-
+ 
     private static void setVel(ServerPlayerEntity p, double x, double y, double z) {
         p.setVelocity(x, y, z);
         p.networkHandler.sendPacket(new EntityVelocityUpdateS2CPacket(p));
     }
-
+ 
     private static void hurt(ServerWorld w, LivingEntity e, ServerPlayerEntity src, float amount) {
         e.damage(w, w.getDamageSources().playerAttack(src), amount);
     }
-
+ 
     private static List<LivingEntity> cone(ServerWorld w, ServerPlayerEntity p, Vec3d dir, double range, double minDot) {
         double ex = p.getX(), ey = p.getEyeY(), ez = p.getZ();
         Box box = new Box(ex - range, ey - range, ez - range, ex + range, ey + range, ez + range);
@@ -210,11 +225,11 @@ public final class InvokerManager {
         }
         return out;
     }
-
+ 
     // ------------------------------------------------------------------ огонь + огонь: фаербол
-
+ 
     private static final double FIREBALL_SPEED = 1.6;
-
+ 
     private static void castFireball(ServerPlayerEntity p, ServerWorld w) {
         Vec3d dir = look(p);
         Vec3d vel = dir.multiply(FIREBALL_SPEED);
@@ -222,7 +237,7 @@ public final class InvokerManager {
         fb.setPosition(p.getX() + dir.x * 1.2, p.getEyeY() - 0.1 + dir.y * 1.2, p.getZ() + dir.z * 1.2);
         w.spawnEntity(fb);
         sound(w, p.getX(), p.getY(), p.getZ(), SoundEvents.ITEM_FIRECHARGE_USE, 0.8F);
-
+ 
         final long end = now + 80;
         EFFECTS.add(t -> {
             if (fb.isRemoved()) return true;
@@ -236,9 +251,9 @@ public final class InvokerManager {
             return false;
         });
     }
-
+ 
     // ------------------------------------------------------------------ огонь + воздух: заряд ветра
-
+ 
     private static void castWind(ServerPlayerEntity p, ServerWorld w) {
         Vec3d dir = look(p);
         for (LivingEntity e : cone(w, p, dir, 7.0, 0.8)) {
@@ -248,7 +263,7 @@ public final class InvokerManager {
         }
         // отдача по кастеру: без урона и без поджога
         push(p, dir.multiply(-1.0).add(0, 0.25, 0));
-
+ 
         for (int i = 1; i <= 7; i++) {
             w.spawnParticles(ParticleTypes.CLOUD, p.getX() + dir.x * i, p.getEyeY() + dir.y * i, p.getZ() + dir.z * i,
                     3, 0.2, 0.2, 0.2, 0.02);
@@ -257,9 +272,9 @@ public final class InvokerManager {
         }
         sound(w, p.getX(), p.getY(), p.getZ(), SoundEvents.ENTITY_BREEZE_SHOOT, 1.0F);
     }
-
+ 
     // ------------------------------------------------------------------ огонь + вода: паровой залп
-
+ 
     private static void castSteam(ServerPlayerEntity p, ServerWorld w) {
         final long end = now + 100;
         final float[] lastHealth = {p.getHealth()};
@@ -272,7 +287,7 @@ public final class InvokerManager {
             }
             lastHealth[0] = p.getHealth();
             if (t >= end) return true;
-
+ 
             Vec3d dir = look(p);
             for (double d = 1.0; d <= 6.0; d += 1.5) {
                 w.spawnParticles(ParticleTypes.CLOUD, p.getX() + dir.x * d, p.getEyeY() - 0.2 + dir.y * d,
@@ -287,9 +302,9 @@ public final class InvokerManager {
             return false;
         });
     }
-
+ 
     // ------------------------------------------------------------------ зоны замедления
-
+ 
     private abstract static class Zone implements Effect {
         final ServerWorld w;
         final long end;
@@ -297,7 +312,7 @@ public final class InvokerManager {
         final double slow;
         final Entity exclude;
         final Set<UUID> affected = new HashSet<>();
-
+ 
         Zone(ServerWorld w, long end, Identifier modId, double slow, Entity exclude) {
             this.w = w;
             this.end = end;
@@ -305,17 +320,17 @@ public final class InvokerManager {
             this.slow = slow;
             this.exclude = exclude;
         }
-
+ 
         abstract boolean inside(Entity e);
-
+ 
         abstract Box bounds();
-
+ 
         abstract void particles(long t);
-
+ 
         boolean alive() {
             return true;
         }
-
+ 
         @Override
         public boolean tick(long t) {
             boolean done = t >= end || !alive();
@@ -346,19 +361,19 @@ public final class InvokerManager {
             return done;
         }
     }
-
+ 
     // ------------------------------------------------------------------ вода + вода: стена
-
+ 
     private static final Identifier WALL_MOD = Identifier.of(InvokerMod.MOD_ID, "wall_slow");
-
+ 
     private static void castWall(ServerPlayerEntity p, ServerWorld w) {
         Vec3d fwd = horizontalLook(p);
         Vec3d right = new Vec3d(-fwd.z, 0, fwd.x);
         final double cx = p.getX() + fwd.x * 3.0, cy = p.getY(), cz = p.getZ() + fwd.z * 3.0;
         final double halfW = 3.5, height = 3.0, halfT = 0.75;
         sound(w, cx, cy, cz, SoundEvents.ENTITY_PLAYER_SPLASH, 0.8F);
-
-        EFFECTS.add(new Zone(w, now + 100, WALL_MOD, 0.75, null) {
+ 
+        EFFECTS.add(new Zone(w, now + 100, WALL_MOD, 0.75, p) {
             @Override
             boolean inside(Entity e) {
                 double dx = e.getX() - cx, dz = e.getZ() - cz, dy = e.getY() - cy;
@@ -366,12 +381,12 @@ public final class InvokerManager {
                 double thick = dx * fwd.x + dz * fwd.z;
                 return Math.abs(along) <= halfW + 0.3 && Math.abs(thick) <= halfT + 0.3 && dy >= -1.0 && dy <= height;
             }
-
+ 
             @Override
             Box bounds() {
                 return new Box(cx - 5, cy - 1, cz - 5, cx + 5, cy + 4, cz + 5);
             }
-
+ 
             @Override
             void particles(long t) {
                 ThreadLocalRandom r = ThreadLocalRandom.current();
@@ -387,16 +402,16 @@ public final class InvokerManager {
             }
         });
     }
-
+ 
     // ------------------------------------------------------------------ вода + воздух: дождь
-
+ 
     private static final Identifier RAIN_MOD = Identifier.of(InvokerMod.MOD_ID, "rain_slow");
-
+ 
     private static void castRain(ServerPlayerEntity p, ServerWorld w) {
         sound(w, p.getX(), p.getY(), p.getZ(), SoundEvents.WEATHER_RAIN, 1.0F);
         EFFECTS.add(new Zone(w, now + 100, RAIN_MOD, 0.70, p) {
             double cx = p.getX(), cy = p.getY(), cz = p.getZ();
-
+ 
             @Override
             boolean alive() {
                 if (!p.isAlive() || p.isRemoved()) return false;
@@ -405,18 +420,18 @@ public final class InvokerManager {
                 cz = p.getZ();
                 return true;
             }
-
+ 
             @Override
             boolean inside(Entity e) {
                 double dx = Math.abs(e.getX() - cx), dz = Math.abs(e.getZ() - cz), dy = e.getY() - cy;
                 return dx <= 4.5 && dz <= 4.5 && dy >= -1.5 && dy <= 6.0;
             }
-
+ 
             @Override
             Box bounds() {
                 return new Box(cx - 5, cy - 2, cz - 5, cx + 5, cy + 7, cz + 5);
             }
-
+ 
             @Override
             void particles(long t) {
                 w.spawnParticles(ParticleTypes.RAIN, cx, cy + 4.5, cz, 40, 2.2, 0.4, 2.2, 0.0);
@@ -426,15 +441,15 @@ public final class InvokerManager {
             }
         });
     }
-
+ 
     // ------------------------------------------------------------------ воздух + воздух: рывок
-
+ 
     private static void castDash(ServerPlayerEntity p, ServerWorld w, State s) {
         final Vec3d f = horizontalLook(p);
         final long start = now;
         s.noFallUntil = Long.MAX_VALUE;
         sound(w, p.getX(), p.getY(), p.getZ(), SoundEvents.ENTITY_ENDER_DRAGON_FLAP, 1.2F);
-
+ 
         EFFECTS.add(t -> {
             if (!p.isAlive() || p.isRemoved()) {
                 s.noFallUntil = t + 10;
@@ -453,6 +468,10 @@ public final class InvokerManager {
                 return true;
             }
             return false;
+        });
+    }
+}
+ 
         });
     }
 }
